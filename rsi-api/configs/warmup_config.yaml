@@ -1,0 +1,11 @@
+warmup:
+  dataset: "ToolBench/ToolBench"
+  dataset_split: "train"
+  max_samples: 5000
+  max_seq_length: 512
+  num_epochs: 1
+  learning_rate: 2e-5
+  batch_size: 8
+  gradient_accumulation_steps: 4
+  output_path: "checkpoints/warmup"
+  logging_steps: 50

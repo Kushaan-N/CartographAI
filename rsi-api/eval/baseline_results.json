@@ -1,0 +1,74 @@
+{
+  "policy": "RANDOM POLICY",
+  "levels": {
+    "1": {
+      "policy": "random",
+      "mean_coverage": 0.0,
+      "success_rate": 0.0,
+      "mean_steps": 5.0,
+      "n_episodes": 3,
+      "episodes": [
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 5,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.2981417910195887
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 5,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.29844637494534254
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 5,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.30027962499298155
+        }
+      ]
+    },
+    "2": {
+      "policy": "random",
+      "mean_coverage": 0.0,
+      "success_rate": 0.0,
+      "mean_steps": 9.333333333333334,
+      "n_episodes": 3,
+      "episodes": [
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 5,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.29322850005701184
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 5,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.28929291607346386
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 18,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.3842750829644501
+        }
+      ]
+    }
+  },
+  "config": {
+    "n_episodes": 3,
+    "levels_tested": [
+      1,
+      2
+    ],
+    "max_steps": 20,
+    "max_total_steps": 35
+  }
+}

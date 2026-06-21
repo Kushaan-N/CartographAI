@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.coverage
+.coverage.*
+logs/
+checkpoints/
+*.safetensors
+*.bin
