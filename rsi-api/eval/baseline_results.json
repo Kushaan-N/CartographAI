@@ -5,29 +5,78 @@
       "policy": "random",
       "mean_coverage": 0.0,
       "success_rate": 0.0,
-      "mean_steps": 5.0,
-      "n_episodes": 3,
+      "mean_steps": 7.8,
+      "n_episodes": 10,
       "episodes": [
         {
           "coverage": 0.0,
           "success": false,
           "steps": 5,
           "failure_mode": "api_locked",
-          "elapsed_s": 0.2981417910195887
+          "elapsed_s": 0.2975492919795215
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 9,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.379091624985449
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 10,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.3785065000411123
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 8,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.380242291954346
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 8,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.37149495899211615
         },
         {
           "coverage": 0.0,
           "success": false,
           "steps": 5,
           "failure_mode": "api_locked",
-          "elapsed_s": 0.29844637494534254
+          "elapsed_s": 0.29325224994681776
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 14,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.3815542919328436
         },
         {
           "coverage": 0.0,
           "success": false,
           "steps": 5,
           "failure_mode": "api_locked",
-          "elapsed_s": 0.30027962499298155
+          "elapsed_s": 0.29110983305145055
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 9,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.2977389170555398
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 5,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.2976062500383705
         }
       ]
     },
@@ -35,35 +84,84 @@
       "policy": "random",
       "mean_coverage": 0.0,
       "success_rate": 0.0,
-      "mean_steps": 9.333333333333334,
-      "n_episodes": 3,
+      "mean_steps": 8.4,
+      "n_episodes": 10,
       "episodes": [
         {
           "coverage": 0.0,
           "success": false,
           "steps": 5,
           "failure_mode": "api_locked",
-          "elapsed_s": 0.29322850005701184
+          "elapsed_s": 0.3012871249811724
         },
         {
           "coverage": 0.0,
           "success": false,
           "steps": 5,
           "failure_mode": "api_locked",
-          "elapsed_s": 0.28929291607346386
+          "elapsed_s": 0.29583037504926324
         },
         {
           "coverage": 0.0,
           "success": false,
-          "steps": 18,
+          "steps": 5,
           "failure_mode": "api_locked",
-          "elapsed_s": 0.3842750829644501
+          "elapsed_s": 0.2928823339752853
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 5,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.3220339580439031
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 7,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.3758321669884026
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 17,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.3791905000107363
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 12,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.3773973749484867
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 7,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.35654195793904364
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 7,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.36309337499551475
+        },
+        {
+          "coverage": 0.0,
+          "success": false,
+          "steps": 14,
+          "failure_mode": "api_locked",
+          "elapsed_s": 0.3162999580381438
         }
       ]
     }
   },
   "config": {
-    "n_episodes": 3,
+    "n_episodes": 10,
     "levels_tested": [
       1,
       2
