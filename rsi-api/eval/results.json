@@ -1,0 +1,166 @@
+{
+  "episodes_trained": 0,
+  "curriculum_level_reached": 1,
+  "levels": {
+    "1": {
+      "endpoints": 3,
+      "base": {
+        "mean_coverage": 0.0,
+        "success_rate": 0.0,
+        "mean_steps": 6.4,
+        "n_episodes": 10,
+        "coverage_distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "trained": {
+        "mean_coverage": 0.0,
+        "success_rate": 0.0,
+        "mean_steps": 5.0,
+        "n_episodes": 10,
+        "coverage_distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "improvement": 0.0
+    },
+    "2": {
+      "endpoints": 6,
+      "base": {
+        "mean_coverage": 0.0,
+        "success_rate": 0.0,
+        "mean_steps": 6.9,
+        "n_episodes": 10,
+        "coverage_distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "trained": {
+        "mean_coverage": 0.0,
+        "success_rate": 0.0,
+        "mean_steps": 5.0,
+        "n_episodes": 10,
+        "coverage_distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "improvement": 0.0
+    },
+    "3": {
+      "endpoints": 10,
+      "base": {
+        "mean_coverage": 0.0,
+        "success_rate": 0.0,
+        "mean_steps": 9.1,
+        "n_episodes": 10,
+        "coverage_distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "trained": {
+        "mean_coverage": 0.0,
+        "success_rate": 0.0,
+        "mean_steps": 5.0,
+        "n_episodes": 10,
+        "coverage_distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "improvement": 0.0
+    },
+    "4": {
+      "endpoints": 15,
+      "base": {
+        "mean_coverage": 0.0,
+        "success_rate": 0.0,
+        "mean_steps": 8.6,
+        "n_episodes": 10,
+        "coverage_distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "trained": {
+        "mean_coverage": 0.0,
+        "success_rate": 0.0,
+        "mean_steps": 5.0,
+        "n_episodes": 10,
+        "coverage_distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "improvement": 0.0
+    }
+  }
+}
