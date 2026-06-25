@@ -15,9 +15,10 @@ training:
   fragility_threshold: 10       # softened from 5: avoid locking the cold-start policy before it accumulates signal
   fragility_penalty: -0.2       # softened from -1.0 so the coverage signal isn't swamped
   fragility_warning_threshold: 3  # consecutive 4xx before warning signal
-  exploration_epsilon: 0.5      # epsilon-greedy structured exploration (probe discovery index + observed endpoints).
-                                # REQUIRED for non-zero coverage variance; without it the policy regresses to the
-                                # flat cold-start floor. Consider decaying over training as the LLM policy takes over.
+  exploration_epsilon: 0.5      # constant fallback if start/end below are absent
+  exploration_epsilon_start: 0.5    # epsilon-greedy structured exploration at episode 0
+  exploration_epsilon_end: 0.05     # annealed floor — LLM policy should drive discovery by here
+  exploration_decay_episodes: 20000 # linear anneal horizon (of 50000 total)
   episodes_per_update: 32
   grpo_group_size: 4
   checkpoint_every: 500

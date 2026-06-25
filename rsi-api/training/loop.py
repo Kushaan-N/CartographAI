@@ -57,6 +57,12 @@ class TrainingLoop:
         while self.episode_count < total_episodes:
             difficulty = self.scheduler.current_difficulty()
 
+            # Anneal exploration epsilon so workers (which build Policy from this
+            # config) rely more on the learned LLM policy as training progresses.
+            from agent.policy import decayed_epsilon
+            eps = decayed_epsilon(self.config, self.episode_count)
+            self.config["training"]["exploration_epsilon"] = eps
+
             group_size = self.config["training"]["grpo_group_size"]
             n_groups = max(1, n_workers // group_size)
 
@@ -112,6 +118,7 @@ class TrainingLoop:
                     "mean_coverage": mean_cov,
                     "success_rate": sr,
                     "curriculum_level": difficulty.level,
+                    "exploration_epsilon": round(eps, 4),
                     "checkpoint": self.current_checkpoint,
                 })
 

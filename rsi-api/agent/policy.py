@@ -25,6 +25,23 @@ from agent.actions import Action, ActionSpace
 MODEL_NAME = "google/gemma-3-1b-it"
 
 
+def decayed_epsilon(config: dict, episode_count: int) -> float:
+    """Linearly anneal the exploration epsilon over training so the LLM policy
+    takes over from the structured-exploration scaffold as it learns.
+
+    Reads training.exploration_epsilon_start / _end / _decay_episodes. Falls back
+    to the constant training.exploration_epsilon when start/end aren't configured,
+    so existing configs keep their fixed behaviour.
+    """
+    t = config.get("training", {}) if isinstance(config, dict) else {}
+    const = t.get("exploration_epsilon", 0.0)
+    start = t.get("exploration_epsilon_start", const)
+    end = t.get("exploration_epsilon_end", start)
+    horizon = t.get("exploration_decay_episodes") or t.get("total_episodes") or 1
+    frac = min(1.0, max(0.0, episode_count / max(horizon, 1)))
+    return start + (end - start) * frac
+
+
 def build_agent_prompt(observation: dict, tokenizer, fragility_threshold: int = 5) -> str:
     """
     Build the agent prompt from an observation using apply_chat_template.
