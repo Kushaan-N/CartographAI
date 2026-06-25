@@ -109,6 +109,27 @@ requests.get(BASE_URL + "/data", timeout=2)
 '''
 
 
+def test_instrumented_app_reports_ready():
+    """The boot-readiness flag must be set for a healthy app, so run_client can
+    detect (and extend) a slow boot instead of measuring a boot-race 0%."""
+    instr = instrument(BRANCHY_FLASK_APP, port=0)
+    try:
+        assert instr.ready is True
+    finally:
+        instr.shutdown()
+
+
+def test_coverage_is_deterministic():
+    """Same source + same client must yield the same branch coverage. Reward
+    determinism (CLAUDE.md verifier invariant) depends on this."""
+    runs = []
+    for _ in range(3):
+        instr = instrument(BRANCHY_FLASK_APP, port=0)
+        runs.append(instr.run_client(BRANCHY_CLIENT).branch_coverage)
+        instr.shutdown()
+    assert len(set(runs)) == 1, f"non-deterministic coverage: {runs}"
+
+
 def test_full_client_beats_empty_client():
     """The verifier must distinguish a client that hits endpoints from one that
     does not. If both return the same coverage, the reward signal is dead (all

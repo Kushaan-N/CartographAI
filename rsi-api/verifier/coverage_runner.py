@@ -55,20 +55,34 @@ class InstrumentedApp:
             stderr=subprocess.DEVNULL,
         )
 
-        # Wait for health check
-        deadline = time.time() + 5.0
+        # Wait for the instrumented app to boot before any client runs.
+        self.ready = self._await_health(timeout=5.0)
+
+    def _await_health(self, timeout: float) -> bool:
+        """Poll /health until the instrumented app responds. Returns readiness.
+        Tracked so run_client can extend the wait under load rather than running
+        the client against a not-yet-listening app (which would yield 0% coverage
+        from a boot race, not from the client's behaviour)."""
         import requests as req
+        deadline = time.time() + timeout
         while time.time() < deadline:
+            if self.process.poll() is not None:
+                return False  # process died during boot
             try:
-                r = req.get(f"{self.url}/health", timeout=0.5)
-                if r.status_code == 200:
-                    break
+                if req.get(f"{self.url}/health", timeout=0.5).status_code == 200:
+                    return True
             except Exception:
                 pass
             time.sleep(0.1)
+        return False
 
     def run_client(self, client_code: str) -> CoverageResult:
         t0 = time.monotonic()
+
+        # Guard against a slow boot under load: if the app wasn't ready at
+        # construction, give it one more bounded chance before running the client.
+        if not getattr(self, "ready", False):
+            self.ready = self._await_health(timeout=3.0)
 
         client_tmp = tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w")
         client_tmp.write(client_code)
