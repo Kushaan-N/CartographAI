@@ -16,6 +16,7 @@ Interface:
 """
 import torch
 import json
+import random
 from typing import Optional
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import LoraConfig, get_peft_model, PeftModel, TaskType
@@ -24,31 +25,55 @@ from agent.actions import Action, ActionSpace
 MODEL_NAME = "google/gemma-3-1b-it"
 
 
-class Policy:
-    def __init__(self, config: dict):
-        """
-        Load Gemma-3-4B-IT from HuggingFace and attach LoRA.
+def build_agent_prompt(observation: dict, tokenizer, fragility_threshold: int = 5) -> str:
+    """
+    Build the agent prompt from an observation using apply_chat_template.
 
-        Steps:
-        1. AutoTokenizer.from_pretrained(MODEL_NAME)
-        2. AutoModelForCausalLM.from_pretrained(
-               MODEL_NAME,
-               torch_dtype=torch.bfloat16,
-               device_map="auto"
-           )
-        3. lora_config = LoraConfig(
-               r=config["model"]["lora_rank"],
-               lora_alpha=config["model"]["lora_alpha"],
-               lora_dropout=config["model"]["lora_dropout"],
-               target_modules=config["model"]["target_modules"],
-               task_type=TaskType.CAUSAL_LM,
-               bias="none"
-           )
-        4. self.model = get_peft_model(base_model, lora_config)
-        5. self.model.print_trainable_parameters()
-        6. self.action_space = ActionSpace()
+    Single source of truth for prompt formatting, shared by Policy.sample_action
+    (inference) and the SFT warm-up data formatter (training) so the two can
+    never drift. NEVER construct the prompt string manually elsewhere.
+    """
+    fragility_line = ""
+    if observation.get("fragility_warning"):
+        consec = observation.get("consecutive_4xx", 0)
+        fragility_line = (
+            f"WARNING: {consec} consecutive 4xx responses. API locks at "
+            f"{fragility_threshold}. Be deliberate.\n"
+        )
+
+    messages = [{
+        "role": "user",
+        "content": (
+            f"You are an API exploration agent. Discover all endpoints of an undocumented API.\n\n"
+            f"Step: {observation.get('episode_step', 0)}\n"
+            f"Discovered: {observation.get('discovered_endpoints', [])}\n"
+            f"Hypothesized: {observation.get('hypothesized_endpoints', [])}\n"
+            f"Auth tokens acquired: {observation.get('auth_tokens_acquired', 0)}\n"
+            f"Last response: status={observation.get('last_response', {}).get('status_code', 'none')} "
+            f"body={str(observation.get('last_response', {}).get('body', ''))[:300]}\n"
+            f"{fragility_line}"
+            f"\nOutput JSON only, no explanation:\n"
+            f'{{"method": "GET", "endpoint": "/path", "headers": {{}}, "body": null}}'
+        ),
+    }]
+    return tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+
+class Policy:
+    def __init__(self, config: dict, checkpoint_path: str = None):
         """
-        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+        Load Gemma-3-1B-IT from HuggingFace and attach LoRA.
+
+        If checkpoint_path is given, load that saved LoRA adapter (e.g. SFT
+        warm-up weights) instead of a freshly-initialized one. Otherwise attach
+        a new LoRA from config.
+        """
+        load_from = checkpoint_path or MODEL_NAME
+        self.tokenizer = AutoTokenizer.from_pretrained(load_from)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -58,20 +83,33 @@ class Policy:
             device_map="auto",
         )
 
-        lora_config = LoraConfig(
-            r=config["model"]["lora_rank"],
-            lora_alpha=config["model"]["lora_alpha"],
-            lora_dropout=config["model"]["lora_dropout"],
-            target_modules=config["model"]["target_modules"],
-            task_type=TaskType.CAUSAL_LM,
-            bias="none",
-        )
-        self.model = get_peft_model(base_model, lora_config)
+        if checkpoint_path:
+            self.model = PeftModel.from_pretrained(
+                base_model, checkpoint_path, is_trainable=True
+            )
+        else:
+            lora_config = LoraConfig(
+                r=config["model"]["lora_rank"],
+                lora_alpha=config["model"]["lora_alpha"],
+                lora_dropout=config["model"]["lora_dropout"],
+                target_modules=config["model"]["target_modules"],
+                task_type=TaskType.CAUSAL_LM,
+                bias="none",
+            )
+            self.model = get_peft_model(base_model, lora_config)
         self.model.print_trainable_parameters()
         self.action_space = ActionSpace()
         self.device = next(self.model.parameters()).device
         self.fragility_threshold = config["training"].get("fragility_threshold", 5)
         self.fragility_warning_threshold = config["training"].get("fragility_warning_threshold", 3)
+        # Epsilon-greedy structured exploration. SFT teaches the policy to emit
+        # plausible actions but not to *copy* endpoints from the observation
+        # (hard for a 1B model via LoRA SFT). With prob exploration_epsilon we
+        # instead probe the discovery index "/" or an un-probed endpoint the
+        # observation already surfaced, with auth headers. This bootstraps the
+        # reward variance GRPO needs; GRPO then trains the LLM toward these
+        # actions (their log_prob is computed under the model as usual).
+        self.exploration_epsilon = config["training"].get("exploration_epsilon", 0.0)
 
     def _build_prompt(self, observation: dict) -> str:
         """
@@ -104,31 +142,7 @@ class Policy:
             add_generation_prompt=True
         )
         """
-        fragility_line = ""
-        if observation.get("fragility_warning"):
-            consec = observation.get("consecutive_4xx", 0)
-            fragility_line = f"WARNING: {consec} consecutive 4xx responses. API locks at {self.fragility_threshold}. Be deliberate.\n"
-
-        messages = [{
-            "role": "user",
-            "content": (
-                f"You are an API exploration agent. Discover all endpoints of an undocumented API.\n\n"
-                f"Step: {observation.get('episode_step', 0)}\n"
-                f"Discovered: {observation.get('discovered_endpoints', [])}\n"
-                f"Hypothesized: {observation.get('hypothesized_endpoints', [])}\n"
-                f"Auth tokens acquired: {observation.get('auth_tokens_acquired', 0)}\n"
-                f"Last response: status={observation.get('last_response', {}).get('status_code', 'none')} "
-                f"body={str(observation.get('last_response', {}).get('body', ''))[:300]}\n"
-                f"{fragility_line}"
-                f"\nOutput JSON only, no explanation:\n"
-                f'{{\"method\": \"GET\", \"endpoint\": \"/path\", \"headers\": {{}}, \"body\": null}}'
-            ),
-        }]
-        return self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
+        return build_agent_prompt(observation, self.tokenizer, self.fragility_threshold)
 
     def sample_action(self, observation: dict) -> Action:
         """
@@ -143,6 +157,11 @@ class Policy:
         Parse output with self.action_space.from_model_output().
         If parsing fails, return self.action_space.sample_random() as fallback.
         """
+        if self.exploration_epsilon > 0 and random.random() < self.exploration_epsilon:
+            explore = self._explore_action(observation)
+            if explore is not None:
+                return explore
+
         prompt = self._build_prompt(observation)
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
         with torch.no_grad():
@@ -157,6 +176,27 @@ class Policy:
         text = self.tokenizer.decode(generated, skip_special_tokens=True)
         action = self.action_space.from_model_output(text)
         return action if action else self.action_space.sample_random()
+
+    _EXPLORE_HEADERS = {
+        "Authorization": "Bearer test123",
+        "X-API-Key": "test123",
+        "X-Service-Token": "test123",
+    }
+
+    def _explore_action(self, observation: dict) -> Optional[Action]:
+        """Structured exploration: probe the discovery index, then un-probed
+        endpoints the observation has surfaced. Returns None if nothing useful
+        to probe (caller falls back to LLM generation)."""
+        hyp = observation.get("hypothesized_endpoints", []) or []
+        discovered = set(observation.get("discovered_endpoints", []) or [])
+        # Probe "/" first — it returns the endpoint index, populating hypotheses.
+        if "/" in hyp and "/" not in discovered:
+            return Action("GET", "/", {}, None)
+        unprobed = [e for e in hyp if e not in discovered and e != "/"]
+        if not unprobed:
+            return None
+        ep = random.choice(unprobed)
+        return Action("GET", ep, dict(self._EXPLORE_HEADERS), None)
 
     def log_prob(self, observation: dict, action) -> torch.Tensor:
         """
