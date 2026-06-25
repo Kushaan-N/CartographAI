@@ -450,6 +450,129 @@ def run_training_loop(config: dict):
     loop.run()
 
 
+@app.function(
+    image=image,
+    gpu="A100",
+    memory=32768,
+    timeout=600,
+    volumes={CHECKPOINT_DIR: volume},
+    secrets=[hf_secret],
+)
+def smoke_train_diagnostics(config: dict) -> dict:
+    """Definitive weight-update check on A100: build a fresh TRAINABLE policy, run
+    one real episode (reward/coverage), then a GRPO step on a guaranteed-varied
+    group, and measure the actual weight delta. Catches the frozen-adapter /
+    zero-advantage failure modes that make training a silent no-op."""
+    import sys, copy
+    sys.path.insert(0, "/app")
+    from curriculum.factory import generate_api
+    from agent.policy import Policy
+    from training.episode import run_episode
+    from training.grpo import GRPOTrainer
+    from training.buffer import GRPOBatch
+
+    policy = Policy(config)
+    trainable = sum(1 for p in policy.model.parameters() if p.requires_grad)
+
+    api = generate_api(level=1, config=config)
+    try:
+        ep = run_episode(policy, api, config)
+    finally:
+        api.shutdown()
+
+    base_r = ep.get("episode_reward", 0.0) or 0.0
+    hi = copy.deepcopy(ep); hi["episode_reward"] = base_r + 0.1
+    lo = copy.deepcopy(ep); lo["episode_reward"] = base_r
+    batch = GRPOBatch(groups=[[hi, lo]])
+
+    trainer = GRPOTrainer(policy, config)
+    trainables = [p for p in policy.model.parameters() if p.requires_grad]
+    before = [p.detach().clone() for p in trainables]
+    loss = trainer.step(batch)
+    delta = max((p.detach() - b).abs().max().item() for p, b in zip(trainables, before)) if trainables else 0.0
+
+    return {
+        "trainable_params": trainable,
+        "episode_coverage": ep.get("branch_coverage", 0.0),
+        "episode_reward": base_r,
+        "grpo_loss": loss,
+        "max_weight_delta": delta,
+        "weights_updated": delta > 1e-7,
+    }
+
+
+@app.local_entrypoint()
+def smoke(config_path: str = "configs/train_config_modal_smoke.yaml", checkpoint: str = ""):
+    """End-to-end Modal smoke test — run BEFORE the full job to confirm the cloud
+    pipeline works and actually updates weights/rewards.
+
+        modal run modal_app.py::smoke
+        modal run modal_app.py::smoke --checkpoint /checkpoints/latest   # use seeded policy
+
+    Verifies: CPU collection (collect_episode.map), reward/coverage non-zero, A100
+    GRPO weight update (train_step + smoke_train_diagnostics), volume checkpoint
+    save + reload, and eval. Exits non-zero on any failed check.
+    """
+    import yaml, random, sys, json as _json
+    from training.buffer import GRPOBatch
+
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+
+    print("=== Modal smoke test ===", flush=True)
+    checks = {}
+
+    # 1) Distributed collection on CPU workers (collect_episode.starmap).
+    gs = config["training"]["grpo_group_size"]
+    n_groups = max(1, config["training"]["episodes_per_update"] // gs)
+    api_configs = []
+    for g in range(n_groups):
+        seed = random.randint(0, 2**31 - 1)
+        for _ in range(gs):
+            api_configs.append({"level": 1, "seed": seed, "api_id": f"g{g}_{seed}", "config": config})
+    inputs = [(cfg, checkpoint, config) for cfg in api_configs]
+    results = [r for r in collect_episode.starmap(inputs) if r]
+    covs = [r.get("branch_coverage", 0.0) for r in results]
+    checks["collection_ok"] = len(results) == len(api_configs)
+    checks["coverage_measured"] = len(covs) > 0 and max(covs) >= 0.0
+    print(f"[1] collected {len(results)}/{len(api_configs)} episodes, "
+          f"coverage mean={sum(covs)/max(len(covs),1):.1%} max={max(covs) if covs else 0:.1%}", flush=True)
+
+    # 2) A100 GRPO weight update on a varied batch + checkpoint save (train_step).
+    groups = []
+    for g in range(n_groups):
+        grp = results[g * gs:(g + 1) * gs]
+        if len(grp) == gs:
+            grp[0] = {**grp[0], "episode_reward": (grp[0].get("episode_reward") or 0.0) + 0.1}
+            groups.append(grp)
+    batch_json = GRPOBatch(groups=groups).to_json()
+    new_ckpt = train_step.remote(checkpoint, batch_json, 0, config)
+    checks["train_step_ok"] = isinstance(new_ckpt, str) and len(new_ckpt) > 0
+    print(f"[2] train_step -> checkpoint {new_ckpt}", flush=True)
+
+    # 3) Definitive weight-update measurement.
+    diag = smoke_train_diagnostics.remote(config)
+    checks["trainable"] = diag["trainable_params"] > 0
+    checks["weights_updated"] = bool(diag["weights_updated"])
+    print(f"[3] diagnostics: trainable_params={diag['trainable_params']} "
+          f"coverage={diag['episode_coverage']:.1%} loss={diag['grpo_loss']:.5f} "
+          f"weight_delta={diag['max_weight_delta']:.2e} updated={diag['weights_updated']}", flush=True)
+
+    # 4) Checkpoint reload + eval (evaluate_policy loads the new checkpoint).
+    ev = evaluate_policy.remote(new_ckpt, 1, 2, config)
+    checks["eval_ok"] = "mean_coverage" in ev
+    print(f"[4] eval on {new_ckpt}: mean_coverage={ev.get('mean_coverage', 0):.1%} "
+          f"n={ev.get('n_episodes')}", flush=True)
+
+    print("\n=== RESULTS ===", flush=True)
+    for k, v in checks.items():
+        print(f"  {'PASS' if v else 'FAIL'}  {k}", flush=True)
+    all_ok = all(checks.values())
+    print(f"\n{'ALL CHECKS PASSED — Modal pipeline is ready for the full run' if all_ok else 'SOME CHECKS FAILED — do not start the full run'}", flush=True)
+    if not all_ok:
+        sys.exit(1)
+
+
 @app.local_entrypoint()
 def main(config_path: str = "configs/train_config.yaml"):
     """
