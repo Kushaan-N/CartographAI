@@ -11,6 +11,7 @@ import time
 import json
 import shutil
 import socket
+import signal
 from dataclasses import dataclass
 
 
@@ -90,13 +91,22 @@ class InstrumentedApp:
             except Exception:
                 pass
 
-        # Stop the Flask app so coverage data is flushed
-        self.process.terminate()
+        # Stop the Flask app so coverage data is flushed.
+        # IMPORTANT: use SIGINT, not SIGTERM. coverage.py writes its data file
+        # in an atexit handler, which runs on SIGINT (raised as KeyboardInterrupt
+        # in the werkzeug server) but NOT on SIGTERM. Sending SIGTERM here causes
+        # the .coverage file to never be written -> num_branches=0 -> 0% coverage
+        # on every episode, zeroing all GRPO advantages.
+        self.process.send_signal(signal.SIGINT)
         try:
             self.process.wait(timeout=3)
         except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait()
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
 
         elapsed_ms = (time.monotonic() - t0) * 1000
 
