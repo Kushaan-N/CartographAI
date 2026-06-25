@@ -309,6 +309,22 @@ def generate_api(level: int, config: dict, factory_weights: dict = None) -> Runn
 
     endpoint_code = "\n\n".join(endpoint_parts)
 
+    # Discovery surface: an open root index that lists available routes (as real
+    # APIs commonly do). This makes endpoints discoverable by probing rather than
+    # by guessing unguessable random-slug names. The agent must still infer auth
+    # schemes and dependency order to actually COVER each handler's branches —
+    # listing a route != covering it. Controlled by config["factory"]["discoverable_index"]
+    # (default True). episode.py already parses paths from 200 bodies into memory.
+    factory_cfg = config.get("factory", {}) if isinstance(config, dict) else {}
+    if factory_cfg.get("discoverable_index", True):
+        index_paths = list(endpoints)
+        index_code = "\n".join([
+            '@app.route("/")',
+            "def _api_index():",
+            f"    return jsonify({{'endpoints': {index_paths!r}, 'service': 'api'}})",
+        ])
+        endpoint_code = index_code + "\n\n" + endpoint_code
+
     secret = uuid.uuid4().hex
     token = uuid.uuid4().hex
     api_key = uuid.uuid4().hex

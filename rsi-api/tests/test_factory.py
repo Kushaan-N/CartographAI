@@ -58,7 +58,8 @@ def test_level_1_endpoint_count():
     api = generate_api(level=1, config=CONFIG)
     try:
         routes = re.findall(r'@app\.route\("(/[^"]*)"', api.source_code)
-        non_system = [r for r in routes if r not in ("/health", "/_inject")]
+        # "/" is the discovery index, a system route like /health and /_inject.
+        non_system = [r for r in routes if r not in ("/", "/health", "/_inject")]
         assert len(non_system) == 3, f"Expected 3 non-system routes, got {len(non_system)}: {non_system}"
     finally:
         api.shutdown()
