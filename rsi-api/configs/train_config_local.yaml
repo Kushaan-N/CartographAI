@@ -1,6 +1,6 @@
 model:
   name: "google/gemma-3-1b-it"
-  lora_rank: 8           # reduced from 16 for faster local testing
+  lora_rank: 16          # matches train_config.yaml + CLAUDE.md (rank has negligible speed cost)
   lora_alpha: 32
   lora_dropout: 0.05
   target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
