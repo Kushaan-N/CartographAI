@@ -28,6 +28,9 @@ reward:
   auth_token_bonus: 0.15
   repeated_request_penalty: 0.1
 
+factory:
+  discoverable_index: true   # root "/" index lists routes so endpoints are discoverable by probing
+
 curriculum:
   levels:
     1: {endpoints: 3, auth_schemes: 1, dependencies: 0, red_herrings: 0}
