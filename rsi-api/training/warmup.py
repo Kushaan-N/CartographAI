@@ -110,6 +110,102 @@ class SFTWarmup:
         from datasets import Dataset
         return Dataset.from_list(formatted)
 
+    # ── Local SFT path: HeuristicPolicy demonstrations (no Modal, no ToolBench) ──
+    def collect_demonstrations(self, n_episodes: int, levels=(1, 2)) -> list:
+        """Run n_episodes with the cheating HeuristicPolicy and return the
+        resulting episode dicts (each holds a trajectory of obs/action steps)."""
+        from curriculum.factory import generate_api
+        from training.episode import run_episode
+        from agent.heuristic_policy import HeuristicPolicy
+
+        episodes = []
+        for i in range(n_episodes):
+            level = levels[i % len(levels)]
+            api = generate_api(level=level, config=self.config)
+            try:
+                result = run_episode(HeuristicPolicy(api, self.config), api, self.config)
+                episodes.append(result)
+            finally:
+                api.shutdown()
+            if (i + 1) % 25 == 0:
+                recent = episodes[-25:]
+                mc = sum(e["branch_coverage"] for e in recent) / len(recent)
+                print(f"  collected {i+1}/{n_episodes} (last-25 mean coverage {mc:.1%})")
+        return episodes
+
+    def episodes_to_dataset(self, episodes: list):
+        """Convert trajectory steps into {prompt+completion} text samples using
+        the SAME prompt format the policy uses at inference (build_agent_prompt)."""
+        import json
+        from agent.policy import build_agent_prompt
+
+        frag = self.config["training"].get("fragility_threshold", 5)
+        samples = []
+        for ep in episodes:
+            for step in ep.get("trajectory", []):
+                obs = step.get("obs")
+                action = step.get("action")
+                if not obs or not isinstance(action, dict):
+                    continue
+                # Skip the fragility-lock terminal step (no real action to imitate).
+                if step.get("step_info", {}).get("api_locked"):
+                    continue
+                prompt = build_agent_prompt(obs, self.tokenizer, frag)
+                completion = json.dumps({
+                    "method": action.get("method", "GET"),
+                    "endpoint": action.get("endpoint", "/"),
+                    "headers": action.get("headers", {}),
+                    "body": action.get("body"),
+                })
+                samples.append({"text": prompt + completion + self.tokenizer.eos_token})
+
+        from datasets import Dataset
+        return Dataset.from_list(samples)
+
+    def run_local(self, n_episodes: int = 200, levels=(1, 2), episodes: list = None) -> str:
+        """Collect HeuristicPolicy demonstrations and run SFT locally (trl 1.6)."""
+        import os
+        from trl import SFTConfig, SFTTrainer
+
+        self.load_model()
+
+        if episodes is None:
+            print(f"=== Collecting {n_episodes} HeuristicPolicy demonstration episodes ===")
+            episodes = self.collect_demonstrations(n_episodes, levels)
+        dataset = self.episodes_to_dataset(episodes)
+        mean_cov = sum(e["branch_coverage"] for e in episodes) / max(len(episodes), 1)
+        print(f"=== Demonstrations: {len(episodes)} episodes "
+              f"(mean coverage {mean_cov:.1%}) -> {len(dataset)} SFT samples ===")
+
+        output_path = self.warmup_config["output_path"]
+        os.makedirs(output_path, exist_ok=True)
+
+        sft_config = SFTConfig(
+            output_dir=output_path,
+            num_train_epochs=self.warmup_config["num_epochs"],
+            per_device_train_batch_size=self.warmup_config.get("local_batch_size",
+                                                               self.warmup_config["batch_size"]),
+            gradient_accumulation_steps=self.warmup_config["gradient_accumulation_steps"],
+            learning_rate=float(self.warmup_config["learning_rate"]),
+            logging_steps=self.warmup_config["logging_steps"],
+            save_strategy="no",
+            report_to="none",
+            dataset_text_field="text",
+            max_length=self.warmup_config["max_seq_length"],
+            packing=False,
+        )
+        trainer = SFTTrainer(
+            model=self.model,
+            args=sft_config,
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+        trainer.train()
+        self.model.save_pretrained(output_path)
+        self.tokenizer.save_pretrained(output_path)
+        print(f"Local SFT warmup complete. Checkpoint saved to {output_path}")
+        return output_path
+
     def run(self) -> str:
         import os
         self.load_model()
