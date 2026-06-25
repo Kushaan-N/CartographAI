@@ -226,6 +226,14 @@ def execute_request(action: Action, base_url: str) -> dict:
         return {"status_code": 0, "headers": {}, "body": str(e)}
 
 
+def _safe_fn_name(ep: str) -> str:
+    """Turn an endpoint path into a valid Python identifier suffix. Endpoints can
+    contain '/', '-', '.', etc. (and arrive via body-parsing); without sanitizing,
+    names like call_v1.2_data would be a SyntaxError, invalidating the WHOLE client
+    and gating the episode reward to 0.0 even when discovery succeeded."""
+    return re.sub(r"\W", "_", ep.strip("/")) or "root"
+
+
 def generate_client(memory: WorkingMemory, base_url: str) -> str:
     lines = [
         "import os, requests",
@@ -256,7 +264,7 @@ def generate_client(memory: WorkingMemory, base_url: str) -> str:
             ep_tokens["Authorization"] = f"Bearer {tok}"
             break  # use first available token
 
-        safe_name = ep.strip("/").replace("/", "_").replace("-", "_") or "root"
+        safe_name = _safe_fn_name(ep)
         headers_repr = repr(ep_tokens) if ep_tokens else "{}"
         lines.append(f"def call_{safe_name}():")
         lines.append(f"    r = requests.get(BASE_URL + {repr(ep)}, headers={headers_repr}, timeout=3)")
@@ -265,7 +273,7 @@ def generate_client(memory: WorkingMemory, base_url: str) -> str:
 
     lines.append("if __name__ == '__main__':")
     for ep in ordered_discovered:
-        safe_name = ep.strip("/").replace("/", "_").replace("-", "_") or "root"
+        safe_name = _safe_fn_name(ep)
         lines.append(f"    call_{safe_name}()")
 
     return "\n".join(lines)
