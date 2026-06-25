@@ -55,8 +55,12 @@ def test_full_coverage_on_complete_client():
     instr = instrument(SIMPLE_FLASK_APP, port=0)
     result = instr.run_client(FULL_CLIENT)
     instr.shutdown()
-    # Hitting all endpoints should give high coverage
-    assert result.branch_coverage >= 0.0  # sanity check
+    # Hitting all endpoints MUST produce non-zero coverage. A >= 0.0 assertion
+    # is vacuous and silently passed even when the coverage data file was never
+    # written (SIGTERM bug). Require real signal: branches must be discovered
+    # and at least some covered.
+    assert result.total_branches > 0, "coverage found no branches — data file not written?"
+    assert result.branch_coverage > 0.0, f"client hit all endpoints but coverage={result.branch_coverage}"
 
 
 def test_zero_coverage_on_empty_client():
@@ -73,3 +77,52 @@ def test_partial_coverage():
     instr.shutdown()
     assert isinstance(result.branch_coverage, float)
     assert 0.0 <= result.branch_coverage <= 1.0
+
+
+# App with branches INSIDE handlers — like factory-generated APIs (auth checks).
+# A client that hits the endpoint covers the in-handler branch; one that does
+# not, can't. This is what makes the reward signal differentiable.
+BRANCHY_FLASK_APP = '''
+from flask import Flask, request, jsonify
+app = Flask(__name__)
+
+@app.route("/health")
+def health():
+    return jsonify(status="ok")
+
+@app.route("/data")
+def data():
+    if request.headers.get("X-Key") == "secret":
+        return jsonify(data=[1, 2, 3])
+    return jsonify(error="unauthorized"), 401
+
+if __name__ == "__main__":
+    import os
+    app.run(port=int(os.environ.get("PORT", 5000)))
+'''
+
+BRANCHY_CLIENT = '''
+import os, requests
+BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:5000")
+requests.get(BASE_URL + "/health", timeout=2)
+requests.get(BASE_URL + "/data", timeout=2)
+'''
+
+
+def test_full_client_beats_empty_client():
+    """The verifier must distinguish a client that hits endpoints from one that
+    does not. If both return the same coverage, the reward signal is dead (all
+    GRPO advantages collapse to zero) — exactly the failure that
+    SIGTERM-on-shutdown caused."""
+    instr = instrument(BRANCHY_FLASK_APP, port=0)
+    full = instr.run_client(BRANCHY_CLIENT)
+    instr.shutdown()
+
+    instr2 = instrument(BRANCHY_FLASK_APP, port=0)
+    empty = instr2.run_client(EMPTY_CLIENT)
+    instr2.shutdown()
+
+    assert full.branch_coverage > empty.branch_coverage, (
+        f"full={full.branch_coverage} not greater than empty={empty.branch_coverage} "
+        "— verifier produces no usable reward gradient"
+    )
