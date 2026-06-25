@@ -16,9 +16,10 @@ training:
   bonus_steps_per_auth: 2
   bonus_steps_per_dependency: 2
   max_total_steps: 35
-  fragility_threshold: 5
-  fragility_penalty: -1.0
+  fragility_threshold: 10      # softened from 5 for cold-start (avoid instant lock)
+  fragility_penalty: -0.2      # softened from -1.0 so coverage signal isn't swamped
   fragility_warning_threshold: 3
+  exploration_epsilon: 0.5     # epsilon-greedy structured exploration (probe index + observed endpoints)
 
 reward:
   coverage_weight: 1.0
