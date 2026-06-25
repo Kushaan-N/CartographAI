@@ -298,19 +298,7 @@ def run_eval_modal(checkpoint: str, n_episodes: int, config: dict) -> dict:
 
     from curriculum.factory import generate_api
     from agent.policy import Policy
-    from agent.actions import ActionSpace
     from training.episode import run_episode
-    import torch
-
-    class RandomPolicy:
-        def __init__(self):
-            self.action_space = ActionSpace()
-
-        def sample_action(self, obs):
-            return self.action_space.sample_random()
-
-        def log_prob(self, obs, action):
-            return torch.tensor(-1.0, requires_grad=True)
 
     def _agg(episodes):
         if not episodes:
@@ -342,8 +330,17 @@ def run_eval_modal(checkpoint: str, n_episodes: int, config: dict) -> dict:
     if not os.path.isabs(checkpoint):
         ckpt_full = os.path.join(CHECKPOINT_DIR, checkpoint.lstrip("/"))
 
-    base_policy = RandomPolicy()
-    trained_policy = Policy(config)
+    # Fair "BASE MODEL vs TRAINED MODEL" comparison:
+    #  - base is the untrained policy (base Gemma + fresh LoRA), NOT a random-action
+    #    policy. Comparing random vs trained is what made the original eval meaningless.
+    #  - exploration is DISABLED for eval (epsilon=0) so we measure what the LLM
+    #    actually learned, not the shared structured-exploration scaffold (which would
+    #    give base and trained near-identical coverage and hide real learning).
+    eval_config = dict(config)
+    eval_config["training"] = {**config.get("training", {}), "exploration_epsilon": 0.0}
+
+    base_policy = Policy(eval_config)
+    trained_policy = Policy(eval_config)
     if os.path.exists(ckpt_full):
         trained_policy.load(ckpt_full)
 
