@@ -256,7 +256,11 @@ class Policy:
             torch_dtype=torch.bfloat16,
             device_map="auto",
         )
-        self.model = PeftModel.from_pretrained(base, path)
+        # is_trainable=True is REQUIRED: PeftModel.from_pretrained loads adapters
+        # FROZEN by default (requires_grad=False). Without this, train_step()
+        # reloads the checkpoint and GRPO updates NOTHING (grad_norm 0) — training
+        # silently becomes a no-op after the first checkpoint.
+        self.model = PeftModel.from_pretrained(base, path, is_trainable=True)
         self.tokenizer = AutoTokenizer.from_pretrained(path)
 
     def update(self, batch, advantages) -> float:
