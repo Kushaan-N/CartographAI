@@ -12,6 +12,39 @@ import random
 
 VALID_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
 
+# Endpoint names in factory-generated APIs are drawn from a FIXED vocabulary
+# (curriculum/diversity.py DOMAIN_POOLS) plus version suffixes. Sampling guesses
+# from this same vocabulary gives the policy a real (non-zero) hit rate on unseen
+# APIs — random alphanumeric slugs are unguessable, but a large fraction of
+# endpoints use these domain words. Mirrors diversity.DOMAIN_POOLS so exploration
+# and the actual name distribution line up.
+COMMON_PATH_SEGMENTS = [
+    # enterprise
+    "records", "accounts", "ledger", "invoices", "contracts", "personnel",
+    "assets", "compliance", "audit", "transactions", "policies", "workflows",
+    "submissions", "approvals", "registry",
+    # technical
+    "nodes", "clusters", "pipelines", "artifacts", "manifests", "schemas",
+    "indices", "streams", "queues", "subscribers", "consumers", "producers",
+    "namespaces", "contexts", "handlers",
+    # civic
+    "permits", "licenses", "filings", "allocations", "disbursements",
+    "applicants", "beneficiaries", "facilities", "zones", "incidents",
+    "complaints", "services", "programs", "agencies", "resources",
+    # generic
+    "items", "entries", "objects", "entities", "elements", "instances",
+    "references", "documents", "data", "users", "list", "api",
+]
+
+# Version/qualifier suffixes the factory appends to domain words (diversity.py).
+PATH_SUFFIXES = ["", "", "", "_v2", "_v3", "_2024", "_prod", "_beta", "_ext", "_legacy", "_new"]
+
+# Auth-flavored endpoint names the factory uses for auth routes.
+AUTH_PATH_SEGMENTS = [
+    "authenticate", "authorize", "token", "credentials", "session", "access",
+    "identity", "verify", "validate", "signin", "auth", "login", "oauth/token",
+]
+
 
 @dataclass
 class Action:
@@ -62,13 +95,28 @@ class ActionSpace:
             if ep not in self.known_endpoints:
                 self.known_endpoints.append(ep)
 
+    def _sample_guess_endpoint(self) -> str:
+        """
+        Generate a plausible endpoint guess from the factory's fixed vocabulary.
+        Forms: /records, /records_v2, /api/items, /v1/contracts, /auth, etc.
+        """
+        roll = random.random()
+        if roll < 0.20:
+            return random.choice(self.known_endpoints)
+        if roll < 0.35:
+            return "/" + random.choice(AUTH_PATH_SEGMENTS)
+        seg = random.choice(COMMON_PATH_SEGMENTS) + random.choice(PATH_SUFFIXES)
+        prefix = random.choice(["", "", "", "/api", "/v1", "/v2"])
+        return f"{prefix}/{seg}"
+
     def sample_random(self) -> Action:
         """
-        Random valid action from current vocabulary.
-        Used for smoke tests and fallback on parse failure.
+        Random valid action. Guesses endpoints from the factory's domain
+        vocabulary (not just 6 hardcoded paths) so exploration has a real hit
+        rate on unseen APIs. Used for smoke tests and parse-failure fallback.
         """
         method = random.choice(["GET", "POST"])
-        endpoint = random.choice(self.known_endpoints)
+        endpoint = self._sample_guess_endpoint()
         headers = random.choice(self.header_templates).copy()
         return Action(method=method, endpoint=endpoint, headers=headers, body=None)
 
