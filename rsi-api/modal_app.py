@@ -104,6 +104,9 @@ class EvalResult:
     memory=4096,
     timeout=300,
     volumes={CHECKPOINT_DIR: volume},
+    secrets=[hf_secret],  # REQUIRED: loads the gated Gemma base model when a
+                          # checkpoint exists. Without it: "gated repo" error and
+                          # collection silently returns error episodes.
 )
 def collect_episode(api_config: dict, policy_checkpoint: str, config: dict) -> dict:
     """
@@ -238,6 +241,7 @@ def train_step(
     memory=4096,
     timeout=300,
     volumes={CHECKPOINT_DIR: volume},
+    secrets=[hf_secret],  # loads the gated Gemma base model for pure-policy eval
 )
 def evaluate_policy(
     checkpoint_path: str,
