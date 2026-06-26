@@ -439,6 +439,92 @@ def run_parallel_episodes(
 
 @app.function(
     image=image,
+    gpu="A100",
+    memory=32768,
+    timeout=1800,
+    volumes={CHECKPOINT_DIR: volume},
+    secrets=[hf_secret],
+)
+def smoke_all(config: dict) -> dict:
+    """Self-contained, server-side smoke. Runs entirely on one A100 (no waiting
+    local entrypoint, so it can't be killed by a client disconnect) and writes a
+    verdict to the volume at /checkpoints/smoke_result.json. Verifies: model load,
+    episode collection + reward/coverage, GRPO weight update (real delta), and
+    checkpoint save -> reload-as-trainable."""
+    import sys, os, json, copy
+    sys.path.insert(0, "/app")
+    from curriculum.factory import generate_api
+    from agent.policy import Policy
+    from training.episode import run_episode
+    from training.grpo import GRPOTrainer
+    from training.buffer import GRPOBatch
+
+    out = {"checks": {}}
+    try:
+        policy = Policy(config)
+        out["checks"]["model_loaded"] = True
+        out["trainable_params"] = sum(1 for p in policy.model.parameters() if p.requires_grad)
+
+        # Collection + reward/coverage.
+        api = generate_api(level=1, config=config)
+        try:
+            ep = run_episode(policy, api, config)
+        finally:
+            api.shutdown()
+        out["episode_coverage"] = ep.get("branch_coverage", 0.0)
+        out["episode_reward"] = ep.get("episode_reward", 0.0)
+        out["checks"]["collection_ok"] = "trajectory" in ep
+
+        # GRPO weight update on a guaranteed-varied group.
+        base_r = ep.get("episode_reward", 0.0) or 0.0
+        hi = copy.deepcopy(ep); hi["episode_reward"] = base_r + 0.1
+        lo = copy.deepcopy(ep); lo["episode_reward"] = base_r
+        trainer = GRPOTrainer(policy, config)
+        trainables = [p for p in policy.model.parameters() if p.requires_grad]
+        before = [p.detach().clone() for p in trainables]
+        loss = trainer.step(GRPOBatch(groups=[[hi, lo]]))
+        delta = max((p.detach() - b).abs().max().item() for p, b in zip(trainables, before)) if trainables else 0.0
+        out["grpo_loss"] = loss
+        out["max_weight_delta"] = delta
+        out["checks"]["weights_updated"] = delta > 1e-7
+
+        # Checkpoint save -> reload as trainable (the frozen-adapter trap).
+        ckpt = f"{CHECKPOINT_DIR}/smoke_ckpt"
+        os.makedirs(ckpt, exist_ok=True)
+        policy.save(ckpt)
+        reloaded = Policy(config); reloaded.load(ckpt)
+        out["reloaded_trainable_params"] = sum(1 for p in reloaded.model.parameters() if p.requires_grad)
+        out["checks"]["reload_trainable"] = out["reloaded_trainable_params"] > 0
+
+        out["all_passed"] = all(out["checks"].values())
+    except Exception as e:
+        import traceback
+        out["error"] = str(e)
+        out["traceback"] = traceback.format_exc()
+        out["all_passed"] = False
+
+    with open(f"{CHECKPOINT_DIR}/smoke_result.json", "w") as f:
+        json.dump(out, f, indent=2)
+    volume.commit()
+    print("SMOKE_RESULT", json.dumps(out.get("checks", {})), "all_passed=", out.get("all_passed"))
+    return out
+
+
+@app.local_entrypoint()
+def smoke_bg(config_path: str = "configs/train_config_modal_smoke.yaml"):
+    """Fire-and-forget launcher for smoke_all — spawns it server-side and returns
+    immediately (survives client disconnects). Read the verdict afterward with:
+        modal volume get rsi-api-checkpoints smoke_result.json -"""
+    import yaml
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+    call = smoke_all.spawn(config)
+    print(f"spawned smoke_all (call {call.object_id}); "
+          f"read result with: modal volume get rsi-api-checkpoints smoke_result.json -")
+
+
+@app.function(
+    image=image,
     cpu=2,
     memory=8192,
     timeout=86400,
