@@ -164,8 +164,10 @@ def collect_episode(api_config: dict, policy_checkpoint: str, config: dict) -> d
 
 @app.function(
     image=image,
-    gpu="A100",
-    memory=32768,
+    gpu="L4",  # one GRPO step on a 1B+LoRA needs ~6-10GB; L4 (24GB, ~$0.80/hr)
+               # is ~3-4x cheaper than A100 with no downside at gate batch sizes.
+               # If the full run's larger batch ever OOMs, bump to "A10G"/"A100".
+    memory=16384,
     timeout=3600,
     volumes={CHECKPOINT_DIR: volume},
     secrets=[hf_secret],
