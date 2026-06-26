@@ -1,8 +1,10 @@
-# Short Modal run — the GO/NO-GO gate. ~1500 episodes (~$3-5) to answer the only
-# question that matters before the full 50k run: does pure_policy_coverage (the
-# exploration-OFF eval) climb off the ~7.1% floor? If yes, the LLM is learning ->
-# scale up with train_config.yaml. If it stays flat while mean_coverage (with
-# exploration) looks fine, the scaffold is doing the work -> rethink before spending more.
+# Short Modal run — the GO/NO-GO gate. ~2500 episodes, sized for a TRUSTWORTHY
+# verdict (not speed), to answer the only question that matters before the full
+# 50k run: does pure_policy_coverage (the exploration-OFF eval) climb off the
+# ~7.1% floor? If yes, the LLM is learning -> scale up with train_config.yaml.
+# If it stays flat through the ~1000 post-decay episodes while with-exploration
+# mean_coverage looks fine, the scaffold is doing the work -> rethink (constrained
+# action selection or a bigger model) before spending more.
 model:
   name: "google/gemma-3-1b-it"
   lora_rank: 16
@@ -23,11 +25,11 @@ training:
   exploration_epsilon: 0.5
   exploration_epsilon_start: 0.5
   exploration_epsilon_end: 0.05
-  exploration_decay_episodes: 1000   # anneal within the short run so we see the LLM take over
+  exploration_decay_episodes: 1500   # gradual anneal; ~1000 post-decay episodes to watch the LLM stand alone
   episodes_per_update: 16
   grpo_group_size: 4
-  checkpoint_every: 200
-  total_episodes: 1500
+  checkpoint_every: 250
+  total_episodes: 2500               # sized for a trustworthy verdict, not speed
 
 reward:
   coverage_weight: 1.0
@@ -38,7 +40,7 @@ reward:
 
 eval:
   enabled: true       # log pure-policy (exploration-off) coverage every checkpoint
-  n_episodes: 8
+  n_episodes: 12      # more eval episodes => less noisy go/no-go signal
 
 factory:
   discoverable_index: true
