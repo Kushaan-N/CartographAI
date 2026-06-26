@@ -114,13 +114,27 @@ class TrainingLoop:
             if self.episode_count % checkpoint_every < n_workers:
                 mean_cov = sum(r.get("branch_coverage", 0) for r in results) / max(len(results), 1)
                 sr = sum(1 for r in results if r.get("success")) / max(len(results), 1)
-                self._log_metrics({
-                    "mean_coverage": mean_cov,
+                metrics = {
+                    "mean_coverage": mean_cov,              # WITH exploration scaffold
                     "success_rate": sr,
                     "curriculum_level": difficulty.level,
                     "exploration_epsilon": round(eps, 4),
                     "checkpoint": self.current_checkpoint,
-                })
+                }
+                # GO/NO-GO signal: pure-policy coverage (exploration OFF). If this
+                # climbs off the ~7.1% floor the LLM is genuinely learning; if it
+                # stays flat while mean_coverage looks fine, the scaffold is doing
+                # all the work. Gated by eval.enabled so the full run can skip it.
+                eval_cfg = self.config.get("eval", {})
+                if eval_cfg.get("enabled") and self.current_checkpoint:
+                    try:
+                        eval_fn = modal.Function.from_name("rsi-api", "evaluate_policy")
+                        ev = eval_fn.remote(self.current_checkpoint, difficulty.level,
+                                            eval_cfg.get("n_episodes", 8), self.config)
+                        metrics["pure_policy_coverage"] = round(ev.get("mean_coverage", 0.0), 4)
+                    except Exception as e:
+                        print(f"[Eval] pure-policy eval skipped: {e}")
+                self._log_metrics(metrics)
 
             failure_dist = analyze(results)
             current_factory_weights = failure_dist.to_factory_weights()

@@ -254,13 +254,20 @@ def evaluate_policy(
     from agent.policy import Policy
     from training.episode import run_episode
 
-    policy = Policy(config)
+    # Measure the LLM's LEARNED behaviour: exploration OFF (epsilon=0). This is the
+    # go/no-go signal — if this rises above the ~7.1% floor over training, the LLM
+    # is internalizing discovery; if it stays flat while the with-exploration
+    # collection coverage looks fine, the scaffold is doing all the work.
+    eval_config = dict(config)
+    eval_config["training"] = {**config.get("training", {}), "exploration_epsilon": 0.0}
+
+    policy = Policy(eval_config)
     if checkpoint_path:
         policy.load(checkpoint_path)
 
     results = []
     for _ in range(n_episodes):
-        api = generate_api(level=level, config=config)
+        api = generate_api(level=level, config=eval_config)
         try:
             result = run_episode(policy, api, config)
             results.append(result)
