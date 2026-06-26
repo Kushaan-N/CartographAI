@@ -50,6 +50,8 @@ def build_agent_prompt(observation: dict, tokenizer, fragility_threshold: int = 
     (inference) and the SFT warm-up data formatter (training) so the two can
     never drift. NEVER construct the prompt string manually elsewhere.
     """
+    from agent.actions import build_candidates
+
     fragility_line = ""
     if observation.get("fragility_warning"):
         consec = observation.get("consecutive_4xx", 0)
@@ -58,19 +60,29 @@ def build_agent_prompt(observation: dict, tokenizer, fragility_threshold: int = 
             f"{fragility_threshold}. Be deliberate.\n"
         )
 
+    candidates = build_candidates(observation)
+    discovered = set(observation.get("discovered_endpoints", []) or [])
+    menu = "\n".join(
+        f"{i}: {ep}{'  (probed OK)' if ep in discovered else ''}"
+        for i, ep in enumerate(candidates)
+    )
+
     messages = [{
         "role": "user",
         "content": (
-            f"You are an API exploration agent. Discover all endpoints of an undocumented API.\n\n"
+            "You are an API exploration agent. Probe endpoints to maximize branch "
+            "coverage of an undocumented API. Probing '/' returns the list of real "
+            "endpoints; probe endpoints you have NOT yet discovered, using auth.\n\n"
             f"Step: {observation.get('episode_step', 0)}\n"
-            f"Discovered: {observation.get('discovered_endpoints', [])}\n"
-            f"Hypothesized: {observation.get('hypothesized_endpoints', [])}\n"
             f"Auth tokens acquired: {observation.get('auth_tokens_acquired', 0)}\n"
             f"Last response: status={observation.get('last_response', {}).get('status_code', 'none')} "
             f"body={str(observation.get('last_response', {}).get('body', ''))[:300]}\n"
             f"{fragility_line}"
-            f"\nOutput JSON only, no explanation:\n"
-            f'{{"method": "GET", "endpoint": "/path", "headers": {{}}, "body": null}}'
+            "\nCandidate endpoints to probe:\n"
+            f"{menu}\n\n"
+            "Pick the single best candidate to probe next. Prefer ones not yet "
+            "discovered. Output JSON only, no explanation:\n"
+            '{"choice": <number>, "method": "GET", "auth": true}'
         ),
     }]
     return tokenizer.apply_chat_template(
@@ -191,8 +203,17 @@ class Policy:
             )
         generated = outputs[0][inputs["input_ids"].shape[1]:]
         text = self.tokenizer.decode(generated, skip_special_tokens=True)
-        action = self.action_space.from_model_output(text)
-        return action if action else self.action_space.sample_random()
+        from agent.actions import build_candidates, parse_selection, selection_to_action
+        candidates = build_candidates(observation)
+        action = parse_selection(text, candidates)
+        if action is not None:
+            return action
+        # Constrained fallback: pick a random candidate (never a hallucinated
+        # endpoint) — prefer an un-probed one to keep discovery moving.
+        discovered = set(observation.get("discovered_endpoints", []) or [])
+        unprobed = [i for i, ep in enumerate(candidates) if ep not in discovered]
+        idx = random.choice(unprobed) if unprobed else 0
+        return selection_to_action(idx, "GET", True, candidates)
 
     _EXPLORE_HEADERS = {
         "Authorization": "Bearer test123",
@@ -220,7 +241,8 @@ class Policy:
         Compute log probability of action given observation.
         Used by GRPOTrainer.compute_loss() in training/grpo.py.
         """
-        from agent.actions import Action as ActionClass
+        from agent.actions import (Action as ActionClass, build_candidates,
+                                    action_to_selection, selection_json)
         if isinstance(action, dict):
             action = ActionClass(
                 method=action["method"],
@@ -229,7 +251,10 @@ class Policy:
                 body=action.get("body"),
             )
         prompt = self._build_prompt(observation)
-        completion = action.to_prompt_repr()
+        # Score the SELECTION (choice/method/auth) the action corresponds to,
+        # using the same candidate menu the prompt presents.
+        candidates = build_candidates(observation)
+        completion = selection_json(action_to_selection(action, candidates))
         full_text = prompt + completion
         inputs = self.tokenizer(
             full_text,

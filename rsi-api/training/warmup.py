@@ -134,10 +134,14 @@ class SFTWarmup:
         return episodes
 
     def episodes_to_dataset(self, episodes: list):
-        """Convert trajectory steps into {prompt+completion} text samples using
-        the SAME prompt format the policy uses at inference (build_agent_prompt)."""
-        import json
+        """Convert trajectory steps into {prompt+completion} text samples in the
+        CONSTRAINED-SELECTION format the policy uses at inference: the prompt
+        presents a numbered candidate menu; the completion is the selection JSON
+        (choice/method/auth) that maps to the demonstrated action. Steps whose
+        action targets an endpoint not on that step's menu are skipped (nothing
+        to imitate)."""
         from agent.policy import build_agent_prompt
+        from agent.actions import build_candidates, action_to_selection, selection_json
 
         frag = self.config["training"].get("fragility_threshold", 5)
         samples = []
@@ -147,16 +151,13 @@ class SFTWarmup:
                 action = step.get("action")
                 if not obs or not isinstance(action, dict):
                     continue
-                # Skip the fragility-lock terminal step (no real action to imitate).
                 if step.get("step_info", {}).get("api_locked"):
                     continue
+                candidates = build_candidates(obs)
+                if action.get("endpoint") not in candidates:
+                    continue  # demonstrated endpoint isn't selectable this step
                 prompt = build_agent_prompt(obs, self.tokenizer, frag)
-                completion = json.dumps({
-                    "method": action.get("method", "GET"),
-                    "endpoint": action.get("endpoint", "/"),
-                    "headers": action.get("headers", {}),
-                    "body": action.get("body"),
-                })
+                completion = selection_json(action_to_selection(action, candidates))
                 samples.append({"text": prompt + completion + self.tokenizer.eos_token})
 
         from datasets import Dataset

@@ -146,3 +146,90 @@ class ActionSpace:
             return action if action.is_valid() else None
         except Exception:
             return None
+
+
+# ── Constrained action selection ──────────────────────────────────────────────
+# The agent SELECTS an action from a discrete, valid candidate set instead of
+# generating a free-form endpoint string. This honors the "constrained action
+# space" invariant: the policy can never emit an invalid/hallucinated endpoint,
+# can't over-emit one path, and the RL problem becomes "rank the candidates"
+# (tractable) rather than "generate an exact random string" (hard for a 1B model).
+
+# Generic auth headers that satisfy the level-1 schemes (bearer / api_key /
+# misleading all accept ANY value).
+AUTH_HEADERS = {
+    "Authorization": "Bearer t",
+    "X-API-Key": "t",
+    "X-Service-Token": "t",
+}
+SEED_CANDIDATES = ["/", "/health", "/api", "/status", "/login", "/auth"]
+
+
+def build_candidates(observation: dict) -> list:
+    """Ordered, deduped endpoints the policy may probe this step: the discovery
+    index '/' and seeded guesses first, then everything the observation has
+    surfaced (hypothesized = not-yet-probed, then already-discovered). Order is
+    deterministic so the same observation always yields the same menu — required
+    for log_prob to reconstruct the choice."""
+    hyp = observation.get("hypothesized_endpoints", []) or []
+    disc = observation.get("discovered_endpoints", []) or []
+    out = []
+    for ep in SEED_CANDIDATES + list(hyp) + list(disc):
+        if ep not in out:
+            out.append(ep)
+    return out
+
+
+def selection_to_action(choice: int, method: str, auth: bool, candidates: list) -> Action:
+    """Resolve a (choice, method, auth) selection into a concrete Action."""
+    if not candidates:
+        candidates = SEED_CANDIDATES
+    if not isinstance(choice, int) or not (0 <= choice < len(candidates)):
+        choice = 0
+    return Action(
+        method=method if method in ("GET", "POST") else "GET",
+        endpoint=candidates[choice],
+        headers=dict(AUTH_HEADERS) if auth else {},
+        body=None,
+    )
+
+
+def action_to_selection(action, candidates: list) -> dict:
+    """Inverse of selection_to_action — map a concrete Action back to a selection
+    (used to format SFT demos and to score actions in log_prob)."""
+    ep = action.endpoint if not isinstance(action, dict) else action.get("endpoint")
+    method = action.method if not isinstance(action, dict) else action.get("method", "GET")
+    headers = action.headers if not isinstance(action, dict) else action.get("headers", {})
+    try:
+        choice = candidates.index(ep)
+    except (ValueError, AttributeError):
+        choice = 0
+    return {
+        "choice": choice,
+        "method": method if method in ("GET", "POST") else "GET",
+        "auth": bool(headers),
+    }
+
+
+def selection_json(selection: dict) -> str:
+    """Canonical JSON string for a selection (stable key order)."""
+    return json.dumps({
+        "choice": selection["choice"],
+        "method": selection["method"],
+        "auth": selection["auth"],
+    })
+
+
+def parse_selection(text: str, candidates: list) -> Optional[Action]:
+    """Parse a model's selection JSON into an Action, constrained to candidates."""
+    try:
+        import re
+        text = re.sub(r"```json|```", "", text).strip()
+        data = json.loads(text)
+        choice = int(data["choice"])
+        if not (0 <= choice < len(candidates)):
+            return None
+        return selection_to_action(choice, data.get("method", "GET"),
+                                   bool(data.get("auth", False)), candidates)
+    except Exception:
+        return None
