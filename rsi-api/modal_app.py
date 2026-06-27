@@ -100,9 +100,9 @@ class EvalResult:
 
 @app.function(
     image=image,
-    cpu=2,
-    memory=4096,
-    timeout=300,
+    gpu="L4",          # GPU collection: the warmed policy explores reliably on GPU
+    memory=16384,      # (~19.6%) but degrades on CPU (~12.9%) due to bf16 generation
+    timeout=300,       # being numerically sloppier on CPU.
     volumes={CHECKPOINT_DIR: volume},
     secrets=[hf_secret],  # REQUIRED: loads the gated Gemma base model when a
                           # checkpoint exists. Without it: "gated repo" error and
@@ -237,9 +237,9 @@ def train_step(
 
 @app.function(
     image=image,
-    cpu=2,
-    memory=4096,
-    timeout=300,
+    gpu="L4",          # GPU so the pure-policy eval measures the policy accurately
+    memory=16384,      # (it degrades on CPU, which would understate learning)
+    timeout=600,
     volumes={CHECKPOINT_DIR: volume},
     secrets=[hf_secret],  # loads the gated Gemma base model for pure-policy eval
 )
@@ -441,6 +441,220 @@ def run_parallel_episodes(
                 print(f"[Local fallback] Group {group_idx} failed: {g_e}")
 
         return results
+
+
+@app.function(
+    image=image,
+    cpu=2,
+    memory=4096,
+    timeout=300,
+    volumes={CHECKPOINT_DIR: volume},
+)
+def diag_discovery(config: dict) -> dict:
+    """Pinpoint why Modal coverage is a flat 7.1%. Checks, on a Modal worker:
+    the factory config flag, whether the deployed /app code has the index logic,
+    whether the generated source contains the "/" route, whether "/" actually
+    serves the endpoint list, and whether a real endpoint returns 200 with auth."""
+    import sys, json, re
+    sys.path.insert(0, "/app")
+    import requests
+    from curriculum.factory import generate_api
+
+    out = {}
+    try:
+        # Is the DEPLOYED /app/agent/policy.py current (has the exploration code)?
+        try:
+            import inspect
+            from agent.policy import Policy as _P
+            out["policy_has_explore_method"] = hasattr(_P, "_explore_action")
+            out["policy_init_has_epsilon"] = "exploration_epsilon" in inspect.getsource(_P.__init__)
+            out["policy_sample_has_epsilon"] = "exploration_epsilon" in inspect.getsource(_P.sample_action)
+        except Exception as e:
+            out["policy_inspect_error"] = str(e)
+
+        out["factory_cfg_seen"] = config.get("factory")
+        try:
+            with open("/app/curriculum/factory.py") as f:
+                out["app_factory_has_index_code"] = "_api_index" in f.read()
+        except Exception as e:
+            out["app_factory_read_error"] = str(e)
+
+        api = generate_api(level=1, config=config)
+        try:
+            out["source_has_root_route"] = '@app.route("/")' in api.source_code
+            real = [p for p in re.findall(r'@app\.route\(["\']([^"\']+)["\']', api.source_code) if p != "/_inject"]
+            out["real_routes"] = real
+            r = requests.get(api.url + "/", timeout=3)
+            out["root_status"] = r.status_code
+            out["root_body"] = r.text[:300]
+            data_eps = [p for p in real if p not in ("/", "/health")]
+            if data_eps:
+                h = {"Authorization": "Bearer test123", "X-API-Key": "test123", "X-Service-Token": "test123"}
+                rr = requests.get(api.url + data_eps[0], headers=h, timeout=3)
+                out["endpoint_probed"] = data_eps[0]
+                out["endpoint_status_with_auth"] = rr.status_code
+
+            # ISOLATE instrument vs policy: run a KNOWN-GOOD client (hits every
+            # endpoint with auth) through the coverage harness. >7.1% => harness
+            # works, policy is the problem; ==7.1% => harness broken on Modal.
+            from verifier.coverage_runner import instrument
+            client = "import os, requests\nB=os.environ['API_BASE_URL']\nh={'Authorization':'Bearer t','X-API-Key':'t','X-Service-Token':'t'}\n"
+            for p in real:
+                client += f"try:\n requests.get(B+{p!r},headers=h,timeout=3)\nexcept Exception: pass\n"
+            instr = instrument(api.source_code, api.port)
+            cov = instr.run_client(client)
+            instr.shutdown()
+            out["known_good_client_coverage"] = cov.branch_coverage
+            out["known_good_branches"] = f"{cov.branches_hit}/{cov.total_branches}"
+            out["instrument_exec_ms"] = round(cov.execution_time_ms)
+        finally:
+            api.shutdown()
+
+        # Decisive test: run a FULL episode with a scripted discover-then-probe
+        # policy (no model). If this discovers, the episode/exploration flow works
+        # on Modal and the problem is specifically the real LLM policy.
+        from training.episode import run_episode
+        from agent.actions import Action, ActionSpace
+
+        class DiscoverProbe:
+            def __init__(self): self.action_space = ActionSpace(); self.exploration_epsilon = 0.0
+            def sample_action(self, obs):
+                hyp = obs.get("hypothesized_endpoints", []) or []
+                disc = set(obs.get("discovered_endpoints", []) or [])
+                h = {"Authorization": "Bearer t", "X-API-Key": "t", "X-Service-Token": "t"}
+                if "/" in hyp and "/" not in disc: return Action("GET", "/", {}, None)
+                un = [e for e in hyp if e not in disc and e != "/"]
+                if un: return Action("GET", un[0], h, None)
+                return Action("GET", "/health", {}, None)
+            def log_prob(self, obs, a):
+                import torch; return torch.tensor(-1.0, requires_grad=True)
+
+        api2 = generate_api(level=1, config=config)
+        try:
+            ep = run_episode(DiscoverProbe(), api2, config)
+            out["discover_probe_coverage"] = ep["branch_coverage"]
+            out["discover_probe_endpoints_discovered"] = ep["metadata"].get("endpoints_discovered")
+            out["discover_probe_failure_mode"] = ep["failure_mode"]
+            out["discover_probe_steps"] = ep["metadata"].get("total_steps_taken")
+        finally:
+            api2.shutdown()
+
+        # What epsilon does the config actually yield, and does the EXACT
+        # epsilon-greedy logic (with a stub LLM = random guess) discover? This
+        # isolates "config doesn't deliver epsilon" from "the model is the issue".
+        import random as _r
+        out["epsilon_from_config"] = config.get("training", {}).get("exploration_epsilon", 0.0)
+
+        class StubEpsilon:
+            _H = {"Authorization": "Bearer t", "X-API-Key": "t", "X-Service-Token": "t"}
+            def __init__(self, cfg):
+                self.action_space = ActionSpace()
+                self.exploration_epsilon = cfg.get("training", {}).get("exploration_epsilon", 0.0)
+            def _explore(self, obs):
+                hyp = obs.get("hypothesized_endpoints", []) or []
+                disc = set(obs.get("discovered_endpoints", []) or [])
+                if "/" in hyp and "/" not in disc: return Action("GET", "/", {}, None)
+                un = [e for e in hyp if e not in disc and e != "/"]
+                if un: return Action("GET", _r.choice(un), dict(self._H), None)
+                return None
+            def sample_action(self, obs):
+                if self.exploration_epsilon > 0 and _r.random() < self.exploration_epsilon:
+                    a = self._explore(obs)
+                    if a is not None: return a
+                return self.action_space.sample_random()  # stub "LLM"
+            def log_prob(self, obs, a):
+                import torch; return torch.tensor(-1.0, requires_grad=True)
+
+        api3 = generate_api(level=1, config=config)
+        try:
+            ep2 = run_episode(StubEpsilon(config), api3, config)
+            out["stub_epsilon_coverage"] = ep2["branch_coverage"]
+            out["stub_epsilon_discovered"] = ep2["metadata"].get("endpoints_discovered")
+            out["stub_epsilon_failure_mode"] = ep2["failure_mode"]
+        finally:
+            api3.shutdown()
+    except Exception as e:
+        import traceback
+        out["error"] = str(e); out["traceback"] = traceback.format_exc()
+
+    with open(f"{CHECKPOINT_DIR}/diag_result.json", "w") as f:
+        json.dump(out, f, indent=2)
+    volume.commit()
+    return out
+
+
+@app.local_entrypoint()
+def diag_bg(config_path: str = "configs/train_config_modal_short.yaml"):
+    import yaml
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+    call = diag_discovery.spawn(config)
+    print(f"spawned diag_discovery ({call.object_id}); read: modal volume get rsi-api-checkpoints diag_result.json -")
+
+
+@app.function(image=image, cpu=4, memory=8192, timeout=600,
+              volumes={CHECKPOINT_DIR: volume}, secrets=[hf_secret])
+def diag_real_policy(config: dict) -> dict:
+    """Load the REAL Gemma Policy and observe what it actually does on Modal:
+    its exploration_epsilon, the actions sample_action emits (does exploration
+    fire?), and a full-episode coverage."""
+    import sys, os, json
+    sys.path.insert(0, "/app")
+    from agent.policy import Policy
+    from curriculum.factory import generate_api
+    from training.episode import run_episode, build_observation
+    from agent.memory import WorkingMemory
+    from agent.actions import ActionSpace
+
+    out = {}
+    ckpt = f"{CHECKPOINT_DIR}/latest"
+    if os.path.exists(os.path.join(ckpt, "adapter_model.safetensors")):
+        policy = Policy(config); policy.load(ckpt); out["loaded"] = "checkpoint"
+    else:
+        policy = Policy(config); out["loaded"] = "fresh"
+    out["exploration_epsilon_on_policy"] = policy.exploration_epsilon
+
+    # Seed a fresh observation like episode.py does and sample 10 actions.
+    mem = WorkingMemory(); asp = ActionSpace()
+    asp.expand_endpoints(["/", "/health", "/api", "/status", "/login", "/auth"])
+    for e in asp.known_endpoints: mem.add_hypothesis(e)
+    obs = build_observation(mem, {"status_code": 0, "headers": {}, "body": ""}, 0)
+    acts = []
+    for _ in range(10):
+        a = policy.sample_action(obs)
+        acts.append(f"{a.method} {a.endpoint} hdrs={sorted(a.headers)}")
+    out["sample_actions"] = acts
+
+    # Run several episodes at epsilon=0 (LLM alone) to measure RELIABILITY on a
+    # Modal CPU worker, comparable to the local validation (mean 19.6%).
+    covs = []
+    config_eval = dict(config)
+    config_eval["training"] = {**config.get("training", {}), "exploration_epsilon": 0.0}
+    policy.exploration_epsilon = 0.0
+    for _ in range(5):
+        api = generate_api(level=1, config=config_eval)
+        try:
+            ep = run_episode(policy, api, config_eval)
+            covs.append(ep["branch_coverage"])
+        finally:
+            api.shutdown()
+    out["episode_coverages"] = [round(c, 3) for c in covs]
+    out["episode_coverage_mean"] = round(sum(covs) / max(len(covs), 1), 3)
+    out["above_floor"] = f"{sum(1 for c in covs if c > 0.08)}/{len(covs)}"
+
+    with open(f"{CHECKPOINT_DIR}/diag_policy.json", "w") as f:
+        json.dump(out, f, indent=2)
+    volume.commit()
+    return out
+
+
+@app.local_entrypoint()
+def diag_policy_bg(config_path: str = "configs/train_config_modal_smoke.yaml"):
+    import yaml
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+    call = diag_real_policy.spawn(config)
+    print(f"spawned diag_real_policy ({call.object_id}); read: modal volume get rsi-api-checkpoints diag_policy.json -")
 
 
 @app.function(
