@@ -1,0 +1,23 @@
+# Dependencies for running the RSI-API training loop on a GPU box (no Modal).
+# Versions are the ones this code was developed and tested against. The training
+# code uses the trl 1.x SFTConfig/SFTTrainer API (processing_class, max_length,
+# dataset_text_field) and transformers >= 4.50 (required for Gemma-3).
+
+# Core ML
+torch>=2.2.0
+transformers>=4.50.0    # tested: 5.12.1 ; Gemma-3 needs >= 4.50
+peft>=0.11.0            # tested: 0.19.1
+trl>=1.0.0             # tested: 1.6.0 ; constrained-format SFT uses the 1.x API
+accelerate>=0.30.0     # tested: 1.14.0
+datasets>=2.19.0       # tested: 5.0.0
+
+# Environment / verifier / agent
+flask>=3.0.0           # tested: 3.1.3 ; procedurally-generated target APIs
+flask-cors
+coverage>=7.0.0        # tested: 7.14.2 ; branch-coverage verifier
+networkx>=3.0          # tested: 3.6.1 ; working-memory graph
+requests
+pyyaml
+
+# Optional: only used on CUDA GPUs (skip on Mac/MPS)
+# bitsandbytes
