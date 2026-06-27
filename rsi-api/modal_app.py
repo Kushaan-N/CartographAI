@@ -123,9 +123,16 @@ def collect_episode(api_config: dict, policy_checkpoint: str, config: dict) -> d
 
     api = None
     try:
+        # CRITICAL: inject the per-group seed so every episode in a GRPO group is
+        # the SAME API. Without it, generate_api gets no seed -> a different random
+        # API per episode -> GRPO's advantage compares coverage across different
+        # APIs (rewards easy-API luck, not good actions) -> collapses the policy.
+        gen_config = dict(api_config.get("config", config))
+        if api_config.get("seed") is not None:
+            gen_config["seed"] = api_config["seed"]
         api = generate_api(
             level=api_config.get("level", 1),
-            config=api_config.get("config", config),
+            config=gen_config,
             factory_weights=api_config.get("factory_weights"),
         )
         # Override api_id with the one from config if provided
@@ -592,7 +599,7 @@ def diag_bg(config_path: str = "configs/train_config_modal_short.yaml"):
     print(f"spawned diag_discovery ({call.object_id}); read: modal volume get rsi-api-checkpoints diag_result.json -")
 
 
-@app.function(image=image, cpu=4, memory=8192, timeout=600,
+@app.function(image=image, gpu="L4", memory=16384, timeout=600,
               volumes={CHECKPOINT_DIR: volume}, secrets=[hf_secret])
 def diag_real_policy(config: dict) -> dict:
     """Load the REAL Gemma Policy and observe what it actually does on Modal:
