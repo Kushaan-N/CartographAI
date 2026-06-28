@@ -64,6 +64,52 @@ it's not the verdict. `pure_policy_cov` is.
 
 ---
 
+# Running on a Slurm cluster (e.g. Unity HPC)
+
+Unity uses **Slurm** — you don't run `python` on the login node; you submit jobs
+that request a GPU. Ready-made scripts are in `slurm/`.
+
+### One-time setup (on the LOGIN node — this is light, no GPU)
+```bash
+git clone https://github.com/Kushaan-N/CartographAI.git
+cd CartographAI/rsi-api
+module avail python conda          # find the right module name for your box
+module load python/3.11            # ADJUST to what `module avail` shows
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+export HF_TOKEN=hf_xxx              # also add to ~/.bashrc so jobs inherit it
+sinfo --summary                    # see partitions / nodes
+```
+Before submitting, edit the two `#SBATCH` lines in `slurm/*.sbatch` if needed:
+`--account=<your_lab>` (if your lab requires one) and the `module load` /
+`source .venv` lines to match your environment.
+
+### Submit the jobs
+```bash
+export HF_TOKEN=hf_xxx             # jobs inherit your env by default
+sbatch slurm/warmup.sbatch        # ~10-30 min -> checkpoints/warmup
+squeue --me                       # watch it (PD=pending, R=running)
+tail -f logs/warmup-*.out         # live output
+
+# once warmup finishes:
+sbatch slurm/gate.sbatch          # the GRPO gate (~4-6h)
+tail -f logs/gate-*.out           # WATCH pure_policy_cov here
+```
+
+### The verdict
+`pure_policy_cov` in `logs/gate-*.out` (and `logs/gate_metrics.jsonl`):
+rises above ~20% → GRPO works; flat ~20% → warmup is the ceiling; drops to 7.1%
+→ degrading. That's the experiment.
+
+### Driving it with Claude
+Run `claude` on the **login node** (it only does light work: git, editing,
+`sbatch`, reading `logs/*.out`). I submit the jobs and read the output files —
+the GPU work happens in the Slurm jobs, not where Claude runs. (Don't run heavy
+compute on the login node.) If compute nodes have internet, you can instead
+`salloc --gpus=1 ...` + `tmux` + `claude` for a direct interactive GPU session.
+
+---
+
 # Getting Claude Code onto the cluster
 
 Claude Code is a terminal CLI; it runs fine over SSH.
