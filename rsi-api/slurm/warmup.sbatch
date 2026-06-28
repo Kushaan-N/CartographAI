@@ -11,16 +11,11 @@
 set -euo pipefail
 mkdir -p logs
 
-# --- environment (ADJUST to Unity's module names; see `module avail`) ----------
-# Unity typically uses conda. Either of these patterns works — keep ONE:
-# (a) venv created once on the login node:
-#     module load python/3.11   # or whatever `module avail python` shows
-#     source .venv/bin/activate
-# (b) conda env:
-#     module load conda/latest
-#     conda activate rsi
+# --- environment (Unity HPC) ---------------------------------------------------
+module load python/3.11.7          # matches the venv built by setup_cluster.sh
 source .venv/bin/activate
-
+# Keep the model cache in WORK storage, not home (avoids home-quota fill):
+export HF_HOME="${HF_HOME:-$(pwd)/.hf_cache}"
 export HF_TOKEN="${HF_TOKEN:?set HF_TOKEN before sbatch (export HF_TOKEN=hf_... )}"
 export TOKENIZERS_PARALLELISM=false
 

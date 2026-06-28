@@ -11,8 +11,10 @@
 set -euo pipefail
 mkdir -p logs
 
-# --- environment (same as warmup.sbatch; keep ONE pattern) ---------------------
+# --- environment (Unity HPC) ---------------------------------------------------
+module load python/3.11.7
 source .venv/bin/activate
+export HF_HOME="${HF_HOME:-$(pwd)/.hf_cache}"
 export HF_TOKEN="${HF_TOKEN:?set HF_TOKEN before sbatch}"
 export TOKENIZERS_PARALLELISM=false
 
