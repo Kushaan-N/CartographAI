@@ -12,7 +12,7 @@ set -euo pipefail
 mkdir -p logs
 
 # --- environment (Unity HPC) ---------------------------------------------------
-module load python/3.11.7
+module load conda/latest           # provides the python that built .venv
 source .venv/bin/activate
 export HF_HOME="${HF_HOME:-$(pwd)/.hf_cache}"
 export HF_TOKEN="${HF_TOKEN:?set HF_TOKEN before sbatch}"

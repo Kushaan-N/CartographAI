@@ -11,6 +11,9 @@ trl>=1.0.0             # tested: 1.6.0 ; constrained-format SFT uses the 1.x API
 accelerate>=0.30.0     # tested: 1.14.0
 datasets>=2.19.0       # tested: 5.0.0
 
+# Test runner (sanity check via `pytest tests/`)
+pytest>=7.0.0
+
 # Environment / verifier / agent
 flask>=3.0.0           # tested: 3.1.3 ; procedurally-generated target APIs
 flask-cors

@@ -12,7 +12,7 @@ set -euo pipefail
 mkdir -p logs
 
 # --- environment (Unity HPC) ---------------------------------------------------
-module load python/3.11.7          # matches the venv built by setup_cluster.sh
+module load conda/latest           # provides the python that built .venv
 source .venv/bin/activate
 # Keep the model cache in WORK storage, not home (avoids home-quota fill):
 export HF_HOME="${HF_HOME:-$(pwd)/.hf_cache}"
