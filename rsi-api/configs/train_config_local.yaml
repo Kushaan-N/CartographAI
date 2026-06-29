@@ -23,7 +23,11 @@ training:
   fragility_warning_threshold: 3
   exploration_epsilon: 0.5         # constant fallback if start/end below are absent
   exploration_epsilon_start: 0.5   # epsilon-greedy structured exploration at episode 0
-  exploration_epsilon_end: 0.05    # annealed floor as the LLM policy takes over
+  exploration_epsilon_end: 0.25    # raised from 0.05: structured exploration is the
+                                   # variance SOURCE GRPO learns from. Decaying to ~0
+                                   # made the group's rollouts identical -> zero
+                                   # advantage -> no gradient -> collapse. Keep a real
+                                   # exploration floor so contrastive groups differ.
   exploration_decay_episodes: 60   # linear anneal horizon (of 100 total local)
 
 reward:
@@ -32,6 +36,8 @@ reward:
   new_endpoint_bonus: 0.05
   auth_token_bonus: 0.15
   repeated_request_penalty: 0.1
+  shaped_episode_weight: 0.1   # weight on summed shaped step rewards folded into the
+                               # episode reward to break coverage ties (advantage variance)
 
 factory:
   discoverable_index: true   # root "/" index lists routes so endpoints are discoverable by probing
