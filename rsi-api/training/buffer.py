@@ -15,6 +15,12 @@ class GRPOBatch:
         """
         For each group: advantage_i = reward_i - mean(group rewards).
         Return flat list aligned with flat list of all trajectories.
+
+        NOTE: deliberately NOT std-normalized. With this env's quantized,
+        near-equal rewards, dividing by a tiny group std would amplify trivial
+        reward noise into order-1 advantages — a destabilizer. The KL anchor to
+        the frozen reference policy (training/grpo.py) is what controls update
+        scale and prevents the policy collapse.
         """
         advantages = []
         for group in self.groups:
