@@ -112,10 +112,28 @@ class Policy:
             device_map="auto",
         )
 
+        # Frozen reference policy for the GRPO KL anchor. Without a reference to
+        # pull toward, the bare policy-gradient update collapses the policy's
+        # entropy to a single deterministic action (the observed 7.1%/1-branch
+        # floor). The reference is a SECOND, non-trainable copy of the same
+        # warmup adapter, so KL(pi_theta || pi_ref) keeps the trained policy near
+        # the competent warmup init instead of letting it drift to a degenerate
+        # one. If no checkpoint is given (fresh LoRA) we fall back to the base
+        # model (adapter disabled) as the reference.
+        self._has_ref_adapter = False
         if checkpoint_path:
             self.model = PeftModel.from_pretrained(
                 base_model, checkpoint_path, is_trainable=True
             )
+            try:
+                self.model.load_adapter(
+                    checkpoint_path, adapter_name="reference", is_trainable=False
+                )
+                self.model.set_adapter("default")
+                self._has_ref_adapter = True
+            except Exception as e:  # pragma: no cover - environment dependent
+                print(f"[policy] reference adapter load failed ({e}); "
+                      f"using base-model KL reference instead")
         else:
             lora_config = LoraConfig(
                 r=config["model"]["lora_rank"],
@@ -236,11 +254,16 @@ class Policy:
         ep = random.choice(unprobed)
         return Action("GET", ep, dict(self._EXPLORE_HEADERS), None)
 
-    def log_prob(self, observation: dict, action) -> torch.Tensor:
-        """
-        Compute log probability of action given observation.
-        Used by GRPOTrainer.compute_loss() in training/grpo.py.
-        """
+    def _activate_policy(self):
+        """Make the trainable ('default') adapter the active one. No-op when there
+        is no separate reference adapter."""
+        if self._has_ref_adapter:
+            self.model.set_adapter("default")
+
+    def _score_tokens(self, observation: dict, action):
+        """Score the SELECTION (choice/method/auth) the action corresponds to,
+        under whichever adapter is currently active. Returns
+        (sum_token_log_prob, mean_token_entropy) over the completion tokens."""
         from agent.actions import (Action as ActionClass, build_candidates,
                                     action_to_selection, selection_json)
         if isinstance(action, dict):
@@ -251,8 +274,7 @@ class Policy:
                 body=action.get("body"),
             )
         prompt = self._build_prompt(observation)
-        # Score the SELECTION (choice/method/auth) the action corresponds to,
-        # using the same candidate menu the prompt presents.
+        # Same candidate menu the prompt presents.
         candidates = build_candidates(observation)
         completion = selection_json(action_to_selection(action, candidates))
         full_text = prompt + completion
@@ -265,14 +287,47 @@ class Policy:
         prompt_ids = self.tokenizer(prompt, return_tensors="pt", max_length=512, truncation=True)["input_ids"]
         prompt_len = prompt_ids.shape[1]
         outputs = self.model(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"])
-        logits = outputs.logits
-        shift_logits = logits[:, prompt_len - 1:-1, :]
+        # float32 for numerically-stable log_softmax/entropy (logits are bf16).
+        shift_logits = outputs.logits[:, prompt_len - 1:-1, :].float()
         shift_labels = inputs["input_ids"][:, prompt_len:]
         if shift_labels.shape[1] == 0:
-            return torch.tensor(0.0, requires_grad=True, device=self.device)
+            z = torch.tensor(0.0, requires_grad=True, device=self.device)
+            return z, z
         log_probs = torch.nn.functional.log_softmax(shift_logits, dim=-1)
         token_log_probs = log_probs.gather(2, shift_labels.unsqueeze(2)).squeeze(2)
-        return token_log_probs.sum()
+        # Predictive entropy at the completion positions (encourages the policy
+        # to stay spread out instead of collapsing onto a single action).
+        entropy = -(log_probs.exp() * log_probs).sum(-1).mean()
+        return token_log_probs.sum(), entropy
+
+    def log_prob(self, observation: dict, action) -> torch.Tensor:
+        """
+        Compute log probability of action given observation (trainable policy).
+        Used by GRPOTrainer.compute_loss() in training/grpo.py.
+        """
+        self._activate_policy()
+        lp, _ = self._score_tokens(observation, action)
+        return lp
+
+    def score_policy(self, observation: dict, action):
+        """(sum_log_prob, mean_entropy) under the trainable policy — both carry
+        gradient. Used for the GRPO policy-gradient term and entropy bonus."""
+        self._activate_policy()
+        return self._score_tokens(observation, action)
+
+    def ref_log_prob(self, observation: dict, action) -> torch.Tensor:
+        """Detached log_prob of the action under the FROZEN reference policy
+        (the warmup adapter, or the base model if no checkpoint). Used for the
+        GRPO KL anchor."""
+        with torch.no_grad():
+            if self._has_ref_adapter:
+                self.model.set_adapter("reference")
+                lp, _ = self._score_tokens(observation, action)
+                self.model.set_adapter("default")
+            else:
+                with self.model.disable_adapter():
+                    lp, _ = self._score_tokens(observation, action)
+        return lp.detach()
 
     def save(self, path: str):
         """
