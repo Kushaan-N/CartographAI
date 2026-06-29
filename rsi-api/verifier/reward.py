@@ -53,4 +53,18 @@ def compute_episode_reward(
         for step in trajectory
         if isinstance(step, dict)
     ) else 0.0
-    return coverage_result.branch_coverage - destructive_penalty
+    # Branch coverage is the primary signal but coarsely quantized (e.g. 1/14 per
+    # branch), so the grpo_group_size rollouts on one API frequently tie on
+    # coverage -> advantage = reward - group_mean = 0 -> no gradient (the observed
+    # collapse). Fold the accumulated shaped step rewards (endpoint/auth/hint
+    # discovery, repeat penalties) in at a small weight so episodes that explored
+    # differently get different rewards even when final coverage ties, restoring
+    # the within-group advantage variance GRPO needs. syntax_valid stays a HARD
+    # GATE above (invalid client -> exactly 0.0).
+    shaped_weight = reward_cfg.get("shaped_episode_weight", 0.1)
+    shaped = sum(
+        step.get("step_reward", 0.0)
+        for step in trajectory
+        if isinstance(step, dict)
+    )
+    return coverage_result.branch_coverage - destructive_penalty + shaped_weight * shaped
