@@ -6,11 +6,13 @@ model:
   target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
 
 training:
-  learning_rate: 5e-5
+  learning_rate: 1e-5    # lowered from 5e-5: 5e-5 + unregularized REINFORCE drove policy collapse
   batch_size: 4          # reduced from 8
   max_episode_steps: 20
-  episodes_per_update: 4  # reduced from 8
-  grpo_group_size: 2     # reduced from 4 for faster local test
+  episodes_per_update: 8  # 2 groups of 4 per update -> real contrastive signal
+  grpo_group_size: 4     # restored from 2; group-relative advantage needs a few samples
+  kl_coef: 0.05          # KL anchor to frozen warmup reference (prevents collapse)
+  entropy_coef: 0.01     # entropy bonus (keeps the action distribution from peaking)
   checkpoint_every: 50
   total_episodes: 100
   bonus_steps_per_auth: 2
