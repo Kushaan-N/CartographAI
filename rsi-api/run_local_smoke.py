@@ -39,7 +39,9 @@ def collect_group(policy, level, cfg):
 def eval_pure_policy(policy, level, n, cfg):
     """Eval with exploration OFF — measures the LLM's learned behaviour."""
     saved = policy.exploration_epsilon
+    saved_greedy = getattr(policy, "eval_greedy", False)
     policy.exploration_epsilon = 0.0
+    policy.eval_greedy = True   # measure the policy's mode, not a temp-0.7 sample
     try:
         covs = []
         for _ in range(n):
@@ -51,6 +53,7 @@ def eval_pure_policy(policy, level, n, cfg):
         return sum(covs) / max(len(covs), 1), (max(covs) if covs else 0.0)
     finally:
         policy.exploration_epsilon = saved
+        policy.eval_greedy = saved_greedy
 
 
 def main():

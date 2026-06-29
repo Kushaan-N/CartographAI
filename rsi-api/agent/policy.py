@@ -157,6 +157,12 @@ class Policy:
         # reward variance GRPO needs; GRPO then trains the LLM toward these
         # actions (their log_prob is computed under the model as usual).
         self.exploration_epsilon = config["training"].get("exploration_epsilon", 0.0)
+        # When True, sample_action decodes greedily (do_sample=False). Used by the
+        # exploration-off pure-policy eval so the measurement reflects the policy's
+        # MODE, not a temperature-0.7 sample — temperature noise was masking
+        # whether the learned policy actually improved. Off during collection
+        # (we want stochastic rollouts there for advantage variance).
+        self.eval_greedy = False
 
     def _build_prompt(self, observation: dict) -> str:
         """
@@ -212,13 +218,21 @@ class Policy:
         prompt = self._build_prompt(observation)
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
         with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=128,
-                temperature=0.7,
-                do_sample=True,
-                pad_token_id=self.tokenizer.eos_token_id,
-            )
+            if self.eval_greedy:
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=128,
+                    do_sample=False,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                )
+            else:
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=128,
+                    temperature=0.7,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                )
         generated = outputs[0][inputs["input_ids"].shape[1]:]
         text = self.tokenizer.decode(generated, skip_special_tokens=True)
         from agent.actions import build_candidates, parse_selection, selection_to_action
