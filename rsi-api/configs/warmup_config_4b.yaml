@@ -1,0 +1,11 @@
+warmup:
+  dataset: "ToolBench/ToolBench"
+  dataset_split: "train"
+  max_samples: 5000
+  max_seq_length: 512
+  num_epochs: 4              # same as 1B strengthened warmup
+  learning_rate: 2e-5
+  batch_size: 4             # halved from 1B's 8 (4B needs more VRAM); pair with...
+  gradient_accumulation_steps: 8   # ...doubled from 4 to keep effective batch = 32
+  output_path: "checkpoints/warmup_4b"   # separate dir — do NOT clobber the 1B warmup
+  logging_steps: 50
